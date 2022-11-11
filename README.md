@@ -1,3 +1,3 @@
 # Data Science Capstone Project: Body Condition in Northern Spring Salamander linked to Environment
-## Kai Barreras
+*By: Kai Barreras*
 ###### This project began 
