@@ -1,0 +1,571 @@
+---
+title: "Salamander Capstone"
+author: "Kai Barreras"
+date: '2022-06-19'
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The original dataset is titled raw.salamander. I will first covert the dataset into a dataframe. 
+```{r upload dataset}
+raw.salamander<-read.csv("/cloud/project/CMR Capture Data.xlsx - Sheet1.csv")
+raw.salamander<- as.data.frame(raw.salamander)
+attach(raw.salamander)
+head(raw.salamander, 4)
+```
+
+Must identify the Pittag as an ID (not in scientific notation) - convert to character. 
+Ultimately I choose to convert to character - because the pittag is a unique ID and I don't actually want any recaptures in the data so converting it to a series of factors doesn't actually offer any informational advantage. 
+
+```{r initial data cleaning}
+raw.salamander$Pittag<-as.character(raw.salamander$Pittag)
+head(raw.salamander, 4)
+```
+
+Let's consider the relevant columns in the data. At the moment, the variables that matter most are Site, Species, Pittag (for the purpose of eliminating recaptured salamanders), OldNew (also for the purpose of eliminating recaptured salamanders), Sex (potentially), SVL, Weight, LatLoc, Sub, Size, Meso, LongLoc, Stage, PhotoSVL, HeadLength, HeadWidth, TrunkLength, TrunkWidth, HumerousLength, FemurLength, TailWidth, and HeightTail. 
+```{r salamander colnames}
+colnames(raw.salamander)
+```
+
+Confirm levels of each relevant categorical variable - ensuring that no typos are present in the data
+```{r levels}
+levels(factor(raw.salamander$Site)) #should have 6 different sites
+levels(factor(raw.salamander$Species)) #should have 3 different species
+levels(factor(raw.salamander$OldNew)) #should have 2 different levels O/N
+levels(factor(raw.salamander$Sex)) #should have 3 different levels M/F/U
+levels(factor(raw.salamander$LatLoc)) #should have 3 different levels B/T/WE
+levels(factor(raw.salamander$Meso)) #should have 3 different levels C/PL/RF + potential combinations and PL/C, C/RF, RF/PL
+# must convert all R values into RF
+#which(Meso == "R") #58, 65, 210
+raw.salamander[c(58,65,210), 16] <- "RF"
+#confirm all levels converted
+levels(factor(raw.salamander$Meso))
+levels(factor(raw.salamander$Stage)) # should have 6 different levels L/M/A/U and combinations of L/M or M/A
+# convert inconsistent A/M to M/A
+raw.salamander[c(which(raw.salamander$Stage == "A/M")),18]<-"M/A"
+levels(factor(raw.salamander$Stage))
+```
+
+The data contains many observations some pertaining to the same repeated salamander given the data was collected from a capture mark ans recapture survey. For the purpose of this data set I want to only consider one observation of the caught salamander. In order to minimize bias, I isolate the recaptured salamander observations and randomly select one observation of the captures to be included in the data set. 
+
+```{r captures and recapture pittags}
+#remove missed salamanders
+salamanders.caught<- raw.salamander[!is.na(raw.salamander$Pittag),]
+print("Total Salamanders Caught (excluding missed & including duplicate captures): ")
+dim(salamanders.caught) #985 salamanders
+
+print("Total Salamanders Caught (recaptures counted only once): ")
+nlevels(factor(salamanders.caught$Pittag)) # number of caught sallys = 855 *** including recaptures
+
+#identify capture frequency 
+captures.df<- as.data.frame(table(salamanders.caught$Pittag))
+#dim(captures.df) #855 values with frequency of captures in the right column
+
+#create new dataset of single captures w/ noo duplicates
+sally.caught.1<-as.matrix(salamanders.caught[c(which(captures.df==1)),]) 
+#750 salamanders left
+print("Number of Single-Capture Salamanders: ")
+dim(sally.caught.1) # confirm 750 rows
+
+```
+
+I iterated through the captures.df dataframe that reflected the frequency of captures for each pittagged salamander. If the frequency was greater than one then I stored the attached pittag number in a variable and search for all instances of that pittag number in the salamanders.caught data frame. Once I had collected all the row numbers pertaining to these duplicates in a vector, I randomly sampled one value from this vector and with this selected row value saved the data from this row in the salamanders.caught data frame to the trimmed duplicates data frame.
+```{r randomly sample recaptures}
+#create a new empty dataset for duplicates that have been trimmed to one instance. 
+duplicates.trimmed<- data.frame(matrix(ncol = ncol(salamanders.caught), nrow = 855)) # 855 = total w/o duplicate data
+colnames(duplicates.trimmed)<-colnames(salamanders.caught)
+dups.handled<-1
+# create a for loop that iterates through the capture frequency matrix and adds all the salamander instances with a frequency >1 to a new dataset of repeats. 
+for (i in 1:nrow(captures.df)){ # 855 is the number of rows/observations in captures.df
+   if (captures.df[i, 2]>1){
+     dup.pittag<-captures.df[i,1] #save the pittag number with duplicates for comparison
+     # find all instances of observation in the salamanders.caught data frame
+     dup.rownums<-which(salamanders.caught$Pittag==dup.pittag) # returns the row numbers of all duplicates
+     # sample one instance from the dataframe randomly 
+     set.seed(1)
+     trimmed.dup<-sample(dup.rownums, size=1)
+     # add this one instance into the final no-duplicate data set.
+     duplicates.trimmed[i,]<-salamanders.caught[trimmed.dup,]
+     dups.handled<-dups.handled+1
+     # add one to i
+    i=i+1
+   }else{
+     unique.pittag<-captures.df[i,1]
+     duplicates.trimmed[i,]<-salamanders.caught[which(salamanders.caught$Pittag==unique.pittag),]
+     i=i+1}
+}
+```
+
+To confirm that the sampling worked I am testing to see if there are any repetitions using nlevels(). The output confirms there are 855 levels each with its own unique Pittag ID number.
+```{r confirm values of trimmed duplicates}
+print("Total number of salamanders caught once should be 855:")
+nlevels(factor(duplicates.trimmed[,4])) # confirm 855
+final.freq<-as.matrix(table(duplicates.trimmed$Pittag))
+#dim(final.freq) # confirm frequencies
+```
+
+Now, I want to minimize the dataset to consider only Gyrinophilus porphyriticus species labelled as (GP).
+```{r species}
+table(duplicates.trimmed$Species)
+```
+There are 744 GP species and 111 DF species in the data. The Desmognathus fuscus (DF) species were not measured to the degree that the GP species were and thus are not useful in drawing comparisons as there is not substantial data to draw from. 
+
+I minimized the dataset to just GP species only. 
+```{r species GP}
+GP.salamanders<- duplicates.trimmed[c(which(duplicates.trimmed$Species == "GP")),]
+nrow(GP.salamanders) # 744 rows of GP salamanders identified
+#confirm only one level of species
+levels(factor(GP.salamanders$Species))
+```
+
+Trim down the data set to include only the predictor and response variables relevant. We can eliminate Date because the timing of these observations does not concern our central question although it can be considered in analysis of missingness for missed vs. captured salamanders. 
+```{r colnames}
+#colnames(GP.salamanders)
+GP.salamanders <- transform(GP.salamanders, 
+                             TailWidth = as.numeric(TailWidth), HeightTail=as.numeric(HeightTail), Site=as.factor(Site))
+
+```
+```{r rename columns}
+final.salamander<- GP.salamanders[,c(2,12,13,15,16,17,18,21,25)]
+colnames(final.salamander)<- c("Stream","Weight", "LatLoc", "RockSize", "MesoLocation", "LongLoc","Stage","SVL","TrunkWidth")
+head(final.salamander,4)
+```
+
+```{r remaining na}
+colSums(is.na(final.salamander))
+#one NA in SVL
+which(is.na(final.salamander$SVL)) #36
+#impute SVL values for PhotoSVL from measurements take in the field?
+final.salamander[36,2] # Field SVL also missing - remove this one row since imputation is not possible
+
+#one NA in RockSize
+which(is.na(final.salamander$RockSize))
+
+which(is.na(final.salamander$TrunkWidth))
+salamander<-final.salamander[-c(36,400,693),]
+
+# confirm no NA's
+colSums(is.na(salamander))
+```
+
+Variable Omissions to consider - There are only 5 observations with salamanders caught in within Mesolocation "C" for cascade - not enough observations to be able to draw conclusions. There are also only 3 observations with salamanders caught in the LatLoc "B" for Bank. This is also not enough observations to draw conclusions. 
+
+Something to consider - Bank was a distinctly unique environment where only adult salamanders are found. For the purpose of distinguishing their behavioral distinctions I thought it best to split the dataset seeing that under the same model, larvae could never take on a true value for Bank. Now, considering removing these three observations of Bank, would it be reasonable to assess the larvae and adults under the same model again? And in this case also include all metamorphs broadly since their in between status no longer adds mystery to the limitations of their environment is we are not considering terrestrial environments at all?
+
+```{r variable exploration and data cleaning}
+table(salamander$MesoLocation) #only 5 observations of salamanders in cascades
+salamander<- salamander[-c(which(salamander$MesoLocation=="C")),]
+levels(factor(salamander$MesoLocation))
+
+
+table(salamander$LatLoc) # only 3 observations of salamanders on the bank
+salamander<-salamander[-c(which(salamander$LatLoc=="B")),]
+levels(factor(salamander$LatLoc))
+
+
+table(salamander$Stream)
+
+
+table(salamander$Stage) # recategorize the L/M and M/A salamanders under M
+#salamander[c(which(salamander$Stage=="L/M")),7]<-"M"
+#salamander[c(which(salamander$Stage=="M/A")),7]<-"M"
+#salamander$Stage<-as.factor(salamander$Stage)
+salamander.a<-salamander[c(which(salamander$Stage=="A")),]
+salamander.l<-salamander[c(which(salamander$Stage=="L")),]
+salamander<- rbind(salamander.l, salamander.a)
+levels(factor(salamander$Stage))
+```
+
+Missingness in the body measurements doesn't seem to have any correlation to other categorical variables. It could be entirely possible that these missing values pertain to just poor photography - as these measurements were taken from photos taken in the field which can be obstructed by water/movement of the salamander, weather conditions etc. 
+
+```{r missingness bias in captured vs missed captures}
+# we only care about miss frequency of GP
+salamanders.missed<- raw.salamander[is.na(raw.salamander$Pittag),]
+salamanders.missed<-salamanders.missed[which(salamanders.missed$Species=="GP"),]
+levels<-levels(factor(salamanders.missed$Notes))
+levels
+# we want to remove dead and too small salamanders from the missed dataset
+# the only Notes levels we are concerned with in this case are "", "MISS", and "MISSED"
+a<-which(salamanders.missed$Notes==levels[c(1)])
+b<-which(salamanders.missed$Notes==levels[c(5)])
+c<-which(salamanders.missed$Notes==levels[c(6)])
+abc<-rbind(a, b, c)
+salamanders.missed<-salamanders.missed[abc,]
+levels(factor(salamanders.missed$Notes))
+
+### Some issue with sorting is occurring - sort the elements and turn dates into factors?
+```
+
+```{r plot missingness}
+salamanders.caught[,1]<-as.Date(salamanders.caught$Date, "%m/%d/%Y")
+catch.frequency<-as.matrix(table(salamanders.caught$Date))
+salamanders.missed[,1] <- as.Date(salamanders.missed$Date, "%m/%d/%Y")
+miss.frequency<-as.matrix(table(salamanders.missed$Date))
+
+par(family = "Helvetica Neue Light")
+plot(miss.frequency, type="l", xlab = "Date", ylab= "Salamander Observations", col=cols[2])
+lines(catch.frequency, col=cols[6], main = "Chronological Salamander Misses")
+legend("topleft", c("Catch Captures","Missed Captures"),cex = 0.85, fill = c(cols[6], cols[2]),border = "black")
+# want to make sure that it is sorted chronologically***
+# add in dates to x axis
+#go back and check the dates of these high frequency misses - what location was being surveyed and how high was the water flow that day?
+
+# would maybe be best if I measured proportion of misses to captures. As captures increase so do misses. Catch more as we got better throughout the season. Number of salamanders seen vs caught
+
+# the output of this kind of tells me that the misses are not necessarily high in proportion to the number of captures but more so, high water/environmental events are responsible for misses. 
+```
+
+Split the data into Larvae and Adult datasets. The behavioral capacities in terms of environment available to them varies distinctly between adults and larvae. Because larvae are exclusively aquatic and only after they transition into adulthood can they also travel beyond the streams into leaf litter and bank. Salamanders categorized as "M" for metamorph, "L/M" for early metamorph stage, and M/A" for late metamorph stage have very few observations and their behaviors too transitional to offer any concrete evidence. 
+```{r adult vs larvae vs metamorph}
+salamander$Stage<-as.factor(salamander$Stage)
+larvae<- salamander[(which(salamander$Stage == "L")),] #396 salamanders
+adults<-salamander[(which(salamander$Stage == "A")),] #322 salamanders
+metamorphs<- salamander[(which(salamander$Stage == "M")),] #15 salamanders
+```
+
+```{r spread across sites}
+levels(factor(salamander$Stream))
+lb<-salamander[c(which(salamander$Stream=="LowerBear")),]
+ub<-salamander[c(which(salamander$Stream=="UpperBear")),]
+lp<-salamander[c(which(salamander$Stream=="LowerParadise")),]
+up<-salamander[c(which(salamander$Stream=="UpperParadise")),]
+lzz<-salamander[c(which(salamander$Stream=="LowerZigZag")),]
+uzz<-salamander[c(which(salamander$Stream=="UpperZigZag")),]
+nrow(lb)
+nrow(ub)
+nrow(lp)
+nrow(up)
+nrow(lzz)
+nrow(uzz) # upper zigzag has a very high salamander count
+```
+
+```{r visualize dispersal across streams}
+#how to plot this as points - is there a way to visualize this to see how and where salamanders accumulate along the stream?
+
+# for the purposes of this visualization - could I make the lat locations into bins for each 5-10m and then use bubbleplot to reflect frequency 
+
+#+ ggtitle("Longitudinal Location by Stream Site")+ theme(plot.title = element_text(hjust = 0.5))
+#, plot.title = element_text(vjust = 9)
+library(ggplot2)
+library(ggpubr)
+lowerb<-ggplot(data=lb, aes(LongLoc, Stream)) + xlab("Longitudinal Location") + ylab("") + geom_point(col=cols[4],alpha=0.3, size=4) + theme(axis.title = element_text(size = 10),text=element_text(family = "Helvetica Neue Light"))
+upperb<-ggplot(data=ub, aes(LongLoc, Stream)) + xlab("Longitudinal Location") + ylab("") + geom_point(col=cols[4],alpha=0.3, size=4)+ theme(axis.title = element_text(size = 10),text=element_text(family = "Helvetica Neue Light"))
+lowerp<-ggplot(data=lp, aes(LongLoc, Stream)) + xlab("Longitudinal Location") + ylab("") + geom_point(col=cols[4],alpha=0.3, size=4)+ theme(axis.title = element_text(size = 10),text=element_text(family = "Helvetica Neue Light"))
+upperp<-ggplot(data=up, aes(LongLoc, Stream)) + xlab("Longitudinal Location") + ylab("") + geom_point(col=cols[4],alpha=0.3, size=4)+ theme(axis.title = element_text(size = 10),text=element_text(family = "Helvetica Neue Light"))
+lowerzz<-ggplot(data=lzz, aes(LongLoc, Stream)) + xlab("Longitudinal Location") + ylab("") + geom_point(col=cols[4],alpha=0.3, size=4)+ theme(axis.title = element_text(size = 10),text=element_text(family = "Helvetica Neue Light"))
+upperzz<-ggplot(data=uzz, aes(LongLoc, Stream)) + xlab("Longitudinal Location") + ylab("") + geom_point(col=cols[4],alpha=0.3, size=4)+ theme(axis.title = element_text(size = 10),text=element_text(family = "Helvetica Neue Light"))
+
+# INCREASE TRANSPARENCY????
+ggarrange(lowerb, upperb, lowerp, upperp, lowerzz, upperzz, ncol = 1, nrow = 6)+
+  theme(plot.margin = margin(1,0.5,1,0.1, "cm"),text=element_text(family = "Helvetica Neue Light"),plot.title = element_text(face = "bold"))
+```
+
+```{r covariance}
+attach(GP.salamanders)
+mydata<-GP.salamanders[,c(12,21:29)]
+draw.hm<-round(cor(mydata, use="complete.obs"),3)
+draw.hm
+
+#pairs(mydata)
+#heat map of correlation matrix
+# SVL and Trunk Width
+```
+
+```{r covariance in body measurements}
+library(plotfunctions)
+library('RColorBrewer')
+library('pheatmap')
+col <- brewer.pal(8, "YlOrRd")
+myBreaks <- c(0, seq(min(draw.hm), length.out=ceiling(4) + 1), seq(max(draw.hm)/8, max(draw.hm), length.out=floor(4)))
+par(family = "Helvetica Neue Light")
+pheatmap(draw.hm, scale="none",color = colorRampPalette(brewer.pal(8,"YlOrRd"))(50),breaks = ,border_color=NA, angle_col=45, drop_levels = FALSE, main = "Correlation Between Potential Response Variables",cex.main=1.2)
+# Plot a corresponding legend
+#gradientLegend(valRange = c(1:8), color = col, side=2, length = 0.7, depth = 0.08)
+#By default R scales these by row, to correct the symmetry along the diagonal, scale ="none"
+```
+
+```{r SVL trunk by site}
+lar.fit<-lm(TrunkWidth~SVL, data=larvae)
+adu.fit<-lm(TrunkWidth~SVL, data=adults)
+cols <- brewer.pal(8, "Paired")
+palette(c(cols[1:6]))
+ggplot(data=salamander, aes(x=SVL, y=TrunkWidth, col=Stage)) + ggtitle("Body Measurement Variation by Stage") + xlab("Snout Vent Length") + ylab("Trunk Width") + geom_point() +scale_color_manual(values = c("Larvae" = cols[2],"Adult"=cols[6])) + geom_abline(intercept = -0.243396,slope = 0.167269, colour = cols[2]) + geom_abline(intercept = 0.194793,slope = 0.149023, colour = cols[6]) + theme(text=element_text(family = "Helvetica Neue Light"),plot.title = element_text(face = "bold"))
+```
+#outliers for Trunk width in snout vent length
+
+```{r SVL trunk by site}
+fit.lb<-lm(TrunkWidth~SVL, data=lb)
+fit.ub<-lm(TrunkWidth~SVL, data=ub)
+fit.lp<-lm(TrunkWidth~SVL, data=lp)
+fit.up<-lm(TrunkWidth~SVL, data=up)
+fit.lzz<-lm(TrunkWidth~SVL, data=lzz)
+fit.uzz<-lm(TrunkWidth~SVL, data=uzz)
+
+lb.means<-c(mean(lb$TrunkWidth), mean(lb$SVL))
+ub.means<-c(mean(ub$TrunkWidth), mean(ub$SVL)) 
+lp.means<-c(mean(lp$TrunkWidth), mean(lp$SVL))
+up.means<-c(mean(up$TrunkWidth), mean(up$SVL)) 
+lzz.means<-c(mean(lzz$TrunkWidth), mean(lzz$SVL))
+uzz.means<-c(mean(uzz$TrunkWidth), mean(uzz$SVL))
+means<- as.data.frame(rbind(lb.means, ub.means, lp.means, up.means, lzz.means, uzz.means))
+colnames(means)<-c("TrunkWidth", "SVL")
+
+library(RColorBrewer)
+cols <- brewer.pal(8, "Paired")
+palette(c(cols[1:6]))
+ggplot(data=salamander, aes(SVL, TrunkWidth, col="black")) + ggtitle("Body Measurement Variation by Stream") + xlab("Snout Vent Length") + ylab("Trunk Width") + geom_point(shape=1) + theme(text=element_text(family = "Helvetica Neue Light"), plot.title = element_text(face = "bold")) +scale_color_manual(values = c("LowerBear" = cols[1],"UpperBear"=cols[2], "LowerParadise" = cols[3], "UpperParadise" = cols[4], "LowerZigZag" = cols[5], "UpperZigZag" = cols[6])) + geom_abline(intercept = 0.7759191,slope = 0.1439883, colour = cols[1]) + geom_abline(intercept = 0.9297775,slope = 0.1423460, colour = cols[2])+ geom_abline(intercept = 0.6207528,slope = 0.1464881, colour = cols[3])+ geom_abline(intercept = 1.2044999,slope = 0.1364824, colour = cols[4]) + geom_abline(intercept = 1.5901710,slope = 0.1336133, colour = cols[5]) + geom_abline(intercept = 1.7369333,slope = 0.1289212, colour = cols[6]) +geom_point(data=means, aes(y=means$TrunkWidth,x=means$SVL), color=c(cols[1], cols[2], cols[3], cols[4], cols[5], cols[6]),size=3, shape = 16)
+
+#       family="Comic Sans MS"
+#       family="CM Roman"
+#       family="Sans"
+#       family="Serif"
+#       family="TT Times New Roman"
+
+#plot mean for each stream
+```
+
+```{r visualizations}
+par(family = "Helvetica Neue Light") # set family to text font desired
+boxplot(SVL~Stream ,data = salamander, main = "Salamander SVL Variation Across Six Streams", ylab="Snout Vent Length", xlab = NULL, cex.main=1.2, cex.lab=0.8, cex.axis=0.6,las=2, col= c(cols[1], cols[2],cols[3],cols[4],cols[5],cols[6]))
+```
+
+```{r visualizing pt two}
+par(family = "Helvetica Neue Light")
+par(mfrow=c(1,2))
+boxplot(SVL~LatLoc ,data = salamander, main = "Salamander SVL variation in Thalweg, and Wetted Edge", ylab="Snout Vent Length", cex.main=0.6, cex.lab=0.7, cex.axis=0.7, las=2, col= c(cols[1], cols[2]))
+boxplot(SVL~MesoLocation ,data = salamander, main = "Salamander SVL variation in Pool, and Riffle", ylab="Snout Vent Length", cex.main=0.6, cex.lab=0.7, cex.axis=0.7, las=2, col = c(cols[3],cols[4]))
+```
+
+
+```{r split training and testing set}
+set.seed(1)
+sample.full<-sample(c(TRUE, FALSE), nrow(salamander), replace=TRUE, prob=c(0.7,0.3))
+training.full<-salamander[sample.full, ]
+testing.full<-salamander[!sample.full, ]
+```
+
+Determine how does one or more of the predictors RockSize, LatLoc, or MesoLocation affect the probability that the salamander will fall into the Larval Stage (baseline adult)
+```{r logistic stage}
+mylogit <- glm(Stage~RockSize+LatLoc+MesoLocation, data = training.full, family = "binomial")
+summary(mylogit)
+mean(mylogit$fitted.values)
+table(training.full$Stage)/sum(table(training.full$Stage))
+#table(training.full$LatLoc)
+#table(training.full$MesoLocation)
+```
+Fitted Model: Stage = 1.560535 - 0.027508*RockSize - 0.534600*LatLocWE - 0.275533*MesoLocationRF
+Output tells us that the log odds of being in the larval stage is significantly reduced for every 1 unit increase in rock size, and significantly reduced if the found environment of the stream is the wetted edge. Though the p-value of MesoLocation is not comparatively as small as both RockSize and LatLocWE, the coefficient suggests that being found in the Riffle of a stream may decrease the log odds of being found in the larval stage. 
+
+In sum, our logistic regression tells us that there is a relationship between Stage and our other environmental predictor variables that may lead us to consider an additive model fitting Stage, RockSize, LatLoc, and MesoLocation on SVL. 
+
+Plot logistic regression rocksize on x axis, 4 splines based on 
+```{r plot logistic}
+family = "Helvetica Neue Light"
+training.full$Stage<-as.numeric(training.full$Stage)
+#training.full$Stage<-(training.full$Stage-1)
+# subtract one from Stage variable (0-1 instead of 1-2)
+plot(Stage~RockSize, data = training.full, xlab="Rock Size in cm", ylab ="Probability of Larval Stage (baseline adult)", cex.main=1.2, main="Probability of Larval Stage Given Rock Size", axes=FALSE)
+box()
+axis(1)
+axis(2) # tell where you want each tick marks to be
+we<-training.full[c(which(training.full$LatLoc=="WE")),]
+th<-training.full[c(which(training.full$LatLoc=="T")),]
+we.rf<-we[c(which(we$MesoLocation=="RF")),]
+th.rf<-th[c(which(th$MesoLocation=="RF")),]
+we.pl<-we[c(which(we$MesoLocation=="PL")),]
+th.pl<-th[c(which(th$MesoLocation=="PL")),]
+l1<-smooth.spline(we.rf$Stage~we.rf$RockSize)
+l2<-smooth.spline(th.rf$Stage~th.rf$RockSize)
+l3<-smooth.spline(we.pl$Stage~we.pl$RockSize)
+l4<-smooth.spline(th.pl$Stage~th.pl$RockSize)
+lines(l1, col=cols[8])
+lines(l2, col=cols[6])
+lines(l3, col=cols[4])
+lines(l4, col=cols[2])
+legend("bottomleft",c("Wetted Edge & Riffle", "Thalweg & Riffle", "Wetted Edge & Pool", "Thalweg & Pool"),fill = c(cols[8], cols[6], cols[4], cols[2]),border = "black", inset = c(0.05, 0.08))
+```
+If we consider this visualization where the baseline is adult life stage, the outcome of this visualization essentially tells us that the probability of falling into the larval stage for all stream locations: Wetted Edge & Riffle, Thalweg & Riffle, and Wetted Edge & Pool is reduced as Rocksize grows larger. What we can also see is that for the stream location, Thalweg & Pool, probability of falling into the larval stage is relatively high regardless of rock size. This suggests we may want to consider an interaction term in our logistic regression with pool and thalweg. 
+
+```{r logistic stage}
+mylogit.interactive <- glm(Stage~RockSize*MesoLocation*LatLoc+LatLoc*MesoLocation+MesoLocation*LatLoc, data = training.full, family = "binomial")
+summary(mylogit.interactive)
+```
+To then consider the contribution of these interaction terms to the fit of the model, we conduct a likelihood ratio test to compare the nested models. Here, the full model is as follows: hat(Stage) = B0 + B1*RockSize + B2*MesoLocationRF + B3*LatLocWE + B4*RockSize:MesoLocationRF + B5*RockSize:LatLocWE + B6*MesoLocationRF:LatLocWE + B7*RockSize:MesoLocationRF:LatLocWE. We want to test under the null hypothesis H0: the initial logististic regression model: hat(Stage) = B0 + B1*RockSize + B2*MesoLocationRF + B3*LatLocWE or the alternative hypothesis Ha: The full interaction model. To do this we conduct a likelihood ratio test on the nested models.  
+```{r likelihood ratio test on nested models}
+library(lmtest)
+lrtest(mylogit,mylogit.interactive)
+#library('car')
+#Anova(mylogit.interactive, type="II", test="Wald")
+```
+
+The output give us the chi-squared test statistic 7.6414, and a corresponding p value of p=0.1056. Since this p-value is not less than 0.05 we fail to reject the null hypothesis. 
+
+```{r cv on logit}
+#pred.logit<-predict(mylogit, newdata=testing.full, )
+#Performance metrics
+par(mfrow=c(2,2))
+plot(mylogit)
+pi.hat<-predict(mylogit,type="response") #predicted prob
+Y.hat <- ifelse(pi.hat>0.5,1,0) #dichomotize using 0.5
+table(Y.hat,training.full$Stage)
+```
+
+The purpose here is to consider H0: b1 = 0, Ha: B1 is non-zero. Essentially, we are looking at the individual t-test to consider if Stage is useful to this model. 
+```{r regression on SVL}
+first.svl.lm<-lm(SVL~Stage+RockSize+LatLoc+MesoLocation, data=training.full)
+summary(first.svl.lm)
+```
+The p value and coefficient indicate to us that Stage contributes significantly to the model. However, given the nature of the data we want to consider whether introducing interaction terms might be useful for the model. 
+
+```{r scatter SVL RockSize}
+library(RColorBrewer)
+cols <- brewer.pal(8, "Paired")
+palette(c(cols[2], cols[6]))
+par(family = "Helvetica Neue Light")
+plot(training.full$SVL~training.full$RockSize, col = training.full$Stage, xlab = "Rock Size in cm", ylab = "SVL in cm", main = "SVL by Stage and Rock Size", cex.main=1.2)
+a<-training.full[c(which(training.full$Stage=="A")),]
+line1<-smooth.spline(a$SVL~a$RockSize)
+l<-training.full[c(which(training.full$Stage=="L")),]
+line2<-smooth.spline(l$SVL~l$RockSize)
+lines(line1, col=cols[2])
+lines(line2, col=cols[6])
+legend("bottomright",c("Adult Salamander", "Larval Salamander"),fill = c(cols[2], cols[6]),border = "black")
+```
+Are the lines parallel? Do they share the same slope? 
+The lines may follow somewhat of a similar trend but vary enough that I may want to consider what additional information an interaction term might contribute to the model. 
+Values appear to be rounded for rocksize!
+
+To consider LatLoc and MesoLocation:
+```{r boxplot}
+library(RColorBrewer)
+cols <- brewer.pal(8, "Paired")
+boxplot(training.full$SVL~training.full$LatLoc + training.full$MesoLocation + training.full$Stage, horizontal = TRUE, las = 1, col=c(cols[2], cols[4], cols[6], cols[8]), ylab="Stream Environment", xlab = "SVL in cm", cex.lab = 0.8,cex.axis=0.55, main = "SVL by Categorical Stream Environment", cex.main=1.2)
+legend("bottomleft",c("Wetted Edge & Riffle", "Thalweg & Riffle", "Wetted Edge & Pool", "Thalweg & Pool"),fill = c(cols[8], cols[6], cols[4], cols[2]),border = "black")
+```
+The boxplot displays roughly the same variance for MesoLocation and LatLoc within each stage larvae and adult but distinctly different ranges of SVL among different stages. As such we may want to consider potential interaction terms in the model. 
+
+This second model introduces interaction terms. Here, the model is as follows: SVL = B0 + B1*Stage + B2*RockSize + B3*LatLoc + B4*MesoLocation + B5*Stage:RockSize + B6*Stage:LatLoc + B7*Stage:MesoLocation. We want to test under the null hypothesis H0: B5 = B6 = B7 = 0 or the alternative hypothesis Ha: at least one coefficient B5, B6, or B7 is nonzero. To do this we conduct a partial F-test. Under null hypothesis F follows an F distribution with degrees of freedom 3, and (504-8) = 496. 
+```{r regression on SVL interaction}
+second.svl.lm<-lm(SVL~Stage+RockSize*Stage+LatLoc*Stage+MesoLocation*Stage, data=training.full)
+anova(second.svl.lm)
+summary(second.svl.lm)
+```
+
+```{r fstat model 2}
+f2<- ((97+79+25)/3)/(44438/496)
+p2<- 1-pf(f2,df1=3,df2=496)
+f2
+p2
+```
+Because the p-value is larger than any reasonable choice of significance level, we do not have enough evidence to reject the null hypothesis. As a result, we may eliminate X5, . . . , X7 all together.
+
+SVL = B0 + B1*LatLoc + B2*Stage + B3*MesoLocation + B4*RockSize + B5*Stage:LatLoc + B6*Stage:RockSize. We want to test under the null hypothesis H0: B5 = B6 = 0 or the alternative hypothesis Ha: at least one coefficient B5 or B6 is nonzero. To do this we conduct a partial F-test. Under null hypothesis F follows an F distribution with degrees of freedom 2, and (504-7) = 497.
+```{r anova}
+third.svl.lm<-lm(SVL~LatLoc*Stage+MesoLocation+Stage*RockSize, data=training.full)
+anova(third.svl.lm)
+summary(third.svl.lm)
+```
+
+```{r fstat model 3}
+f2<- ((97+79)/2)/(44463/497)
+p2<- 1-pf(f2,df1=3,df2=496)
+f2
+p2
+```
+Because the p-value is larger than any reasonable choice of significance level, we do not have enough evidence to reject the null hypothesis. As a result, we may eliminate X5, and X6 all together.
+
+```{r regression w/o MesoLocation}
+fourth.svl.lm<-lm(SVL~Stage+RockSize+LatLoc, data=training.full)
+summary(fourth.svl.lm)
+```
+
+```{r comparison of adjusted R squared}
+summary(first.svl.lm)$adj.r.squared # first full model 
+summary(second.svl.lm)$adj.r.squared # interactive model
+summary(fourth.svl.lm)$adj.r.squared # reduced model
+```
+Though all only marginally different, the adjusted R squared of the first model without the interaction terms seems to signify that the best model is the first model. 
+
+```{r model performance}
+pred.1 = predict(first.svl.lm,newdata = testing.full)
+pred.2 = predict(second.svl.lm,newdata = testing.full)
+pred.3 = predict(third.svl.lm,newdata = testing.full)
+pred.4 = predict(fourth.svl.lm,newdata = testing.full)
+#compute the sum of squared residuals for the validation set
+pred.error.1 = sum((testing.full$SVL-pred.1)^2)
+pred.error.1
+pred.error.2 = sum((testing.full$SVL-pred.2)^2)
+pred.error.2
+pred.error.3 = sum((testing.full$SVL-pred.3)^2)
+pred.error.3
+```
+
+```{r CV performance metrics}
+library(tidyverse)
+pred.1 = predict(first.svl.lm,newdata = testing.full)
+pred.2 = predict(second.svl.lm,newdata = testing.full)
+pred.3 = predict(third.svl.lm,newdata = testing.full)
+pred.4 = predict(fourth.svl.lm,newdata = testing.full)
+
+pred.1.train = predict(first.svl.lm,newdata = training.full)
+pred.2.train = predict(second.svl.lm,newdata = training.full)
+pred.3.train = predict(third.svl.lm,newdata = training.full)
+pred.4.train = predict(fourth.svl.lm,newdata = training.full)
+#R-squared (R2), representing the squared correlation between the observed outcome values and the predicted values by the model. The higher the adjusted R2, the better the model.
+#Root Mean Squared Error (RMSE), which measures the average prediction error made by the model in predicting the outcome for an observation. That is, the average difference between the observed known outcome values and the values predicted by the model. The lower the RMSE, the better the model.
+#Mean Absolute Error (MAE), an alternative to the RMSE that is less sensitive to outliers. It corresponds to the average absolute difference between observed and predicted outcomes. The lower the MAE, the better the model
+library(caret)
+library(modelr)
+m1<-data.frame( Model = "Model 1",
+            R2.train = summary(first.svl.lm)$adj.r.squared,    
+            #R2.test = R2(pred.1, testing.full$SVL),
+            RMSE.train = RMSE(pred.1.train, training.full$SVL),
+            RMSE.test = RMSE(pred.1, testing.full$SVL),
+            BIC=BIC(first.svl.lm),
+            fit = RMSE(pred.1.train, training.full$SVL)-RMSE(pred.1, testing.full$SVL)
+            )
+m2<-data.frame( Model = "Model 2",
+            R2.train = summary(second.svl.lm)$adj.r.squared,
+            #R2.test = R2(pred.2, testing.full$SVL),
+            RMSE.train = RMSE(pred.2.train, training.full$SVL),
+            RMSE.test = RMSE(pred.2, testing.full$SVL),
+            BIC=BIC(second.svl.lm),
+            fit = RMSE(pred.2.train, training.full$SVL)-RMSE(pred.2, testing.full$SVL)
+            )
+m4<-data.frame( Model = "Model 4",
+            R2.train = summary(fourth.svl.lm)$adj.r.squared,    
+            #R2.test = R2(pred.4, testing.full$SVL),
+            RMSE.train = RMSE(pred.4.train, training.full$SVL),
+            RMSE.test = RMSE(pred.4, testing.full$SVL),
+            BIC = BIC(fourth.svl.lm),
+            fit = RMSE(pred.4.train, training.full$SVL)-RMSE(pred.4, testing.full$SVL)
+            )
+rbind(m1,m2,m4)
+```
+
+```{r CV performance more}
+BIC(first.svl.lm)
+BIC(second.svl.lm)
+BIC(fourth.svl.lm) # has smallest BIC value
+
+AIC(first.svl.lm)
+AIC(second.svl.lm)
+AIC(fourth.svl.lm) # has smallest AIC value
+#rmse(first.svl.lm, data = training.full)
+```
+
+```{r residuals}
+#residual plot: e versus y.hat
+par(mfrow = c(2,2))
+plot(resid(first.svl.lm)~fitted(first.svl.lm),xlab="Fitted Values",ylab="Residuals", main="Residuals Model 1")
+plot(resid(second.svl.lm)~fitted(second.svl.lm),xlab="Fitted Values",ylab="Residuals", main="Residuals Model 2")
+plot(resid(third.svl.lm)~fitted(third.svl.lm),xlab="Fitted Values",ylab="Residuals", main="Residuals Model 3")
+plot(resid(fourth.svl.lm)~fitted(fourth.svl.lm),xlab="Fitted Values",ylab="Residuals", main="Residuals Model 4")
+```
+
+```{r residuals model 1}
+plot(resid(first.svl.lm)~training.full$RockSize,xlab="RockSize",ylab="Residuals")
+```
